@@ -1,0 +1,223 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mqtt
+
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mosquitto-data
+  namespace: mqtt
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mosquitto-tls-certs
+  namespace: mqtt
+type: Opaque # Reverted to Opaque per your template instructions
+#stringData:
+  #ca.crt: "" # Paste CA certificate content here
+  #server.crt: "" # Paste server certificate content here
+  #server.key: "" # Paste server private key content here
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: mqtt
+data:
+  mosquitto.conf: |
+    persistence true
+    persistence_location /mosquitto/data/
+    allow_anonymous true
+
+    # Unsecured Listener
+    listener 1883
+    protocol mqtt
+
+    # Secured MQTT-S Listener
+    #listener 8883
+    #protocol mqtt
+    #cafile /etc/mosquitto/certs/ca.crt
+    #certfile /etc/mosquitto/certs/server.crt
+    #keyfile /etc/mosquitto/certs/server.key
+
+    # WebSocket Listener
+    listener 9001
+    protocol websockets
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  namespace: mqtt
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mosquitto
+  strategy:
+    type: Recreate      # Use Recreate for ReadWriteOnly PersistentVolumeClaims; RollingUpdate for stateless
+  template:
+    metadata:
+      labels:
+        app: mosquitto
+
+    spec:
+      ## default: apps-standard, elevated: apps-high, essential infra: infra-critical
+#      priorityClassName: apps-standard
+
+    ## GPU capabilities and node specificaiton
+#      runtimeClassName: nvidia       # Required NVIDIA container runtime for GPU injection
+#      nodeSelector:
+#        kubernetes.io/hostname: gpu-node-01
+
+      containers:
+        - name: mosquitto
+          image: docker.io/eclipse-mosquitto:2.0.20
+          imagePullPolicy: IfNotPresent   # default: IfNotPresent, use always to force image re-pull
+          # Explicitly point Mosquitto to use the mounted ConfigMap file
+          #args: ["mosquitto", "-c", "/mosquitto-config/mosquitto.conf"]
+
+          env:
+            - name: TZ
+              value: "Europe/Helsinki"
+
+            ## If you want to give the full database url as one secret
+            ## use this
+            #- name: DATABASE_URL
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: database-url
+
+            ## otherwise, it's also possible to give user and password separately
+            #- name: POSTGRES_USER
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: username
+            #- name: POSTGRES_PASSWORD
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: password
+
+          ports:
+            - containerPort: 1883 # Unsecured MQTT
+            - containerPort: 8883 # Secured MQTTS
+            - containerPort: 9001 # WebSockets
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              #nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+              #nvidia.com/gpu: "1"
+
+          ## Health probes
+#          livenessProbe:
+#            httpGet:
+#              path: /healthz
+#              port: 80
+#            initialDelaySeconds: 10
+#            periodSeconds: 30
+#          readinessProbe:
+#            httpGet:
+#              path: /ready
+#              port: 80
+#            initialDelaySeconds: 5
+#            periodSeconds: 10
+
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+            - name: storage
+              mountPath: /mosquitto/data
+              subPath: data
+            - name: storage
+              mountPath: /mosquitto/log
+              subPath: log
+            - name: certs
+              mountPath: /etc/mosquitto/certs
+              readOnly: true
+
+      volumes:
+        - name: config
+          configMap:
+            name: mosquitto-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: mosquitto-data
+        - name: certs
+          secret:
+            secretName: mosquitto-tls-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mosquitto
+  namespace: mqtt
+spec:
+  type: ClusterIP
+  selector:
+    app: mosquitto
+  ports:
+    - name: mqtt
+      port: 1883
+      targetPort: 1883
+    - name: mqtts
+      port: 8883
+      targetPort: 8883
+    - name: websocket
+      port: 9001
+      targetPort: 9001
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: mosquitto-mqtts
+  namespace: mqtt
+spec:
+  entryPoints:
+    - mqtts
+  routes:
+    - match: HostSNI(`mqtt.metrocloud.aiot-garage.net`)
+ ## Authentik middlware: enable for services without proper SSO integration
+      ## to allow only users authenticated to Authentik through
+#      middlewares:
+#        - name: authentik-forwardauth
+#          namespace: authentik
+
+      services:
+        - name: mosquitto
+          port: 8883
+#tls: {}     # metrocloud-wildcard-tls: *.metrocloud.aiot-garage.net via default TLSstore
+
+  tls:
+    secretName: mosquitto-tls-certs   # *.something-else.aiot-garage.net specify a different certificate if needed
+
+      
+
+   

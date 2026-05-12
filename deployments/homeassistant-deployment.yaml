@@ -1,0 +1,158 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homeassistant
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: config-data
+  namespace: homeassistant
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homeassistant
+  namespace: homeassistant
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: homeassistant
+  strategy:
+    type: Recreate      # Use Recreate for ReadWriteOnly PersistentVolumeClaims; RollingUpdate for stateless
+  template:
+    metadata:
+      labels:
+        app: homeassistant
+
+    spec:
+      ## default: apps-standard, elevated: apps-high, essential infra: infra-critical
+#      priorityClassName: apps-standard
+
+    ## GPU capabilities and node specificaiton
+#      runtimeClassName: nvidia       # Required NVIDIA container runtime for GPU injection
+#      nodeSelector:
+#        kubernetes.io/hostname: gpu-node-01
+
+      containers:
+        - name: homeassistant
+          image: ghcr.io/home-assistant/home-assistant:2026.2.3
+          imagePullPolicy: IfNotPresent   # default: IfNotPresent, use always to force image re-pull
+          #securityContext:
+            #privileged: true
+          env:
+            - name: TZ
+              value: "Europe/Helsinki"
+
+            ## If you want to give the full database url as one secret
+            ## use this
+            #- name: DATABASE_URL
+            #  valueFrom:
+            #   secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: database-url
+
+            ## otherwise, it's also possible to give user and password separately
+          #  - name: POSTGRES_USER
+          #    valueFrom:
+          #      secretKeyRef:
+          #        name: my-app-db-credentials
+          #        key: username
+          #  - name: POSTGRES_PASSWORD
+          #    valueFrom:
+          #      secretKeyRef:
+          #        name: my-app-db-credentials
+          #        key: password
+
+          ports:
+            - name: http
+              containerPort: 8123
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              #nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+              #nvidia.com/gpu: "1"
+
+          ## Health probes
+#          livenessProbe:
+#            httpGet:
+#              path: /healthz
+#              port: 80
+#            initialDelaySeconds: 10
+#            periodSeconds: 30
+#          readinessProbe:
+#            httpGet:
+#              path: /ready
+#              port: 80
+#            initialDelaySeconds: 5
+#            periodSeconds: 10
+
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: dbus
+              mountPath: /run/dbus
+              readOnly: true
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: config-data
+        - name: dbus
+          hostPath:
+            path: /run/dbus
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homeassistant
+  namespace: homeassistant
+spec:
+  type: ClusterIP
+  selector:
+    app: homeassistant
+  ports:
+    - name: http
+      port: 8123
+      targetPort: 8123
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: homeassistant
+  namespace: homeassistant
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`ha.metrocloud.aiot-garage.net`)
+      kind: Rule
+
+      ## Authentik middlware: enable for services without proper SSO integration
+      ## to allow only users authenticated to Authentik through
+#      middlewares:
+#        - name: authentik-forwardauth
+#          namespace: authentik
+
+      services:
+        - name: homeassistant
+          port: 8123
+  tls: {}     # metrocloud-wildcard-tls: *.metrocloud.aiot-garage.net via default TLSstore
+  # tls:
+  #   secretName: other-wildcard-tls    # *.something-else.aiot-garage.net specify a different certificate if needed

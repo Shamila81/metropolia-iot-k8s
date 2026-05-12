@@ -1,0 +1,32 @@
+--- IDE / Editors ---
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+--- Operating System Files ---
+
+Windows junk
+
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+macOS junk
+
+.DS_Store
+
+--- Local Kubernetes / Minikube ---
+
+If you ever save local cluster configs or logs
+
+*.log
+.minikube/
+.kube/
+
+--- Temporary Files ---
+
+tmp/
+temp/
+out/

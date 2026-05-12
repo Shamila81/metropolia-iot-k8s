@@ -1,0 +1,188 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: go2rtc
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: go2rtc-data
+  namespace: go2rtc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go2rtc-config
+  namespace: go2rtc
+data:
+  go2rtc.yaml: |
+    # Basic API and WebRTC configuration
+    api:
+      listen: ":1984"
+    rtsp:
+      listen: ":8554"
+    webrtc:
+      listen: ":8555"
+    # Streams can be added here or via the web UI
+    streams: {}
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go2rtc
+  namespace: go2rtc
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go2rtc
+  strategy:
+    type: Recreate      # Use Recreate for ReadWriteOnly PersistentVolumeClaims; RollingUpdate for stateless
+  template:
+    metadata:
+      labels:
+        app: go2rtc
+
+    spec:
+      ## default: apps-standard, elevated: apps-high, essential infra: infra-critical
+#      priorityClassName: apps-standard
+
+    ## GPU capabilities and node specificaiton
+      #runtimeClassName: nvidia       # Required NVIDIA container runtime for GPU injection
+#      nodeSelector:
+#        kubernetes.io/hostname: gpu-node-01
+
+      containers:
+        - name: go2rtc
+          image: docker.io/alexxit/go2rtc:1.9.4
+          imagePullPolicy: IfNotPresent   # default: IfNotPresent, use always to force image re-pull
+
+          env:
+            - name: TZ
+              value: "Europe/Helsinki"
+
+            ## If you want to give the full database url as one secret
+            ## use this
+            #- name: DATABASE_URL
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: database-url
+
+            ## otherwise, it's also possible to give user and password separately
+            #- name: POSTGRES_USER
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #     key: username
+            #- name: POSTGRES_PASSWORD
+            #  valueFrom:
+            #    secretKeyRef:
+            #      name: my-app-db-credentials
+            #      key: password
+
+          ports:
+            - name: api
+              containerPort: 1984
+            - name: rtsp
+              containerPort: 8554
+            - name: webrtc
+              containerPort: 8555
+            
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              #nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+              #nvidia.com/gpu: "1"
+
+          ## Health probes
+#          livenessProbe:
+#            httpGet:
+#              path: /healthz
+#              port: 80
+#            initialDelaySeconds: 10
+#            periodSeconds: 30
+#          readinessProbe:
+#            httpGet:
+#              path: /ready
+#              port: 80
+#            initialDelaySeconds: 5
+#            periodSeconds: 10
+
+          volumeMounts:
+            - name: config
+              mountPath: /config/go2rtc.yaml
+              subPath: go2rtc.yaml
+            - name: storage
+              mountPath: /config
+            
+      volumes:
+        - name: config
+          configMap:
+            name: go2rtc-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: go2rtc-data
+        
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go2rtc
+  namespace: go2rtc
+spec:
+  type: ClusterIP
+  selector:
+    app: go2rtc
+  ports:
+    - name: api
+      port: 1984
+      targetPort: 1984
+    - name: rtsp
+      port: 8554
+      targetPort: 8554
+    - name: webrtc
+      port: 8555
+      targetPort: 8555
+   
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: go2rtc
+  namespace: go2rtc
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`go2rtc.metrocloud.aiot-garage.net`)
+      kind: Rule
+
+      ## Authentik middlware: enable for services without proper SSO integration
+      ## to allow only users authenticated to Authentik through
+#      middlewares:
+#        - name: authentik-forwardauth
+#          namespace: authentik
+
+      services:
+        - name: go2rtc
+          port: 1984
+  tls: {}     # metrocloud-wildcard-tls: *.metrocloud.aiot-garage.net via default TLSstore
+  # tls:
+  #   secretName: other-wildcard-tls    # *.something-else.aiot-garage.net specify a different certificate if needed

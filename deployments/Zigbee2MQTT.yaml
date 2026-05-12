@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mqtt
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zigbee2mqtt-data
+  namespace: mqtt
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zigbee2mqtt-config
+  namespace: mqtt
+data:
+  configuration.yaml: |
+    # Home Assistant integration
+    homeassistant: true
+    
+    # Allow new devices to join
+    permit_join: false
+    
+    # MQTT Settings 
+    mqtt:
+      base_topic: zigbee2mqtt
+      server: 'mqtt://mosquitto.mqtt.svc.cluster.local:1883'
+    
+    # Serial Settings 
+    serial:
+      port: /dev/ttyACM0
+      adapter: ezsp 
+    
+    frontend:
+      port: 8080
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zigbee2mqtt
+  namespace: mqtt
+
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zigbee2mqtt
+  strategy:
+    type: Recreate      # Use Recreate for ReadWriteOnly PersistentVolumeClaims; RollingUpdate for stateless
+  template:
+    metadata:
+      labels:
+        app: zigbee2mqtt
+
+    spec:
+      ## default: apps-standard, elevated: apps-high, essential infra: infra-critical
+#      priorityClassName: apps-standard
+
+    ## GPU capabilities and node specificaiton
+#      runtimeClassName: nvidia       # Required NVIDIA container runtime for GPU injection
+#      nodeSelector:
+#        kubernetes.io/hostname: gpu-node-01
+
+      containers:
+        - name: zigbee2mqtt
+          image: ghcr.io/koenkk/zigbee2mqtt:1.36.0
+          imagePullPolicy: IfNotPresent   # default: IfNotPresent, use always to force image re-pull
+
+          securityContext:
+            privileged: true 
+
+          env:
+            - name: TZ
+              value: "Europe/Helsinki"
+
+            ## If you want to give the full database url as one secret
+            ## use this
+           # - name: DATABASE_URL
+            #  valueFrom:
+            #    secretKeyRef:
+            #     name: my-app-db-credentials
+            #     key: database-url
+
+            ## otherwise, it's also possible to give user and password separately
+           # - name: POSTGRES_USER
+            #  valueFrom:
+             #   secretKeyRef:
+             #     name: my-app-db-credentials
+             #     key: username
+            #- name: POSTGRES_PASSWORD
+             # valueFrom:
+             #   secretKeyRef:
+             #     name: my-app-db-credentials
+             #     key: password
+
+          ports:
+            - name: frontend
+              containerPort: 8080
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              #nvidia.com/gpu: "1"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+              #nvidia.com/gpu: "1"
+
+          ## Health probes
+#          livenessProbe:
+#            httpGet:
+#              path: /healthz
+#              port: 80
+#            initialDelaySeconds: 10
+#            periodSeconds: 30
+#          readinessProbe:
+#            httpGet:
+#              path: /ready
+#              port: 80
+#            initialDelaySeconds: 5
+#            periodSeconds: 10
+
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: config
+              mountPath: /app/data/configuration.yaml
+              subPath: configuration.yaml # Injects the file without overwriting the /data folder
+            - name: udev
+              mountPath: /run/udev
+              readOnly: true
+            - name: usb
+              mountPath: /dev/ttyACM0 # The physical USB path on the host node
+
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: zigbee2mqtt-data
+        - name: config
+          configMap:
+            name: zigbee2mqtt-config
+        - name: udev
+          hostPath:
+            path: /run/udev
+        - name: usb
+          hostPath:
+            path: /dev/ttyACM0 
+          
+      
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zigbee2mqtt
+  namespace: mqtt
+spec:
+  type: ClusterIP
+  selector:
+    app: zigbee2mqtt
+  ports:
+    - name: frontend
+      port: 8080
+      targetPort: 8080
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: zigbee2mqtt
+  namespace: mqtt
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`z2m.metrocloud.aiot-garage.net`)
+      kind: Rule
+
+      ## Authentik middlware: enable for services without proper SSO integration
+      ## to allow only users authenticated to Authentik through
+#      middlewares:
+#        - name: authentik-forwardauth
+#          namespace: authentik
+
+      services:
+        - name: zigbee2mqtt
+          port: 8080
+  tls: {}     # metrocloud-wildcard-tls: *.metrocloud.aiot-garage.net via default TLSstore
+  # tls:
+  #   secretName: other-wildcard-tls    # *.something-else.aiot-garage.net specify a different certificate if needed
