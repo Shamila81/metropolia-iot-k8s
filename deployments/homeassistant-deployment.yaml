@@ -47,7 +47,7 @@ spec:
 
       containers:
         - name: homeassistant
-          image: ghcr.io/home-assistant/home-assistant:2026.2.3
+          image: docker.io/homeassistant/home-assistant:2026.2.3
           imagePullPolicy: IfNotPresent   # default: IfNotPresent, use always to force image re-pull
           #securityContext:
             #privileged: true
