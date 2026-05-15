@@ -287,7 +287,7 @@ kubectl apply -f deployment.yaml
 
 ## Figure 1
 
-![Minikube Dashboard](images/dashboard.png)
+![Minikube Dashboard](../images/minikube-dashboard.png)
 
 **Figure 1:** Successful initialization of the local Kubernetes dashboard for resource monitoring.
 

@@ -87,7 +87,11 @@ spec:
 #      runtimeClassName: nvidia       # Required NVIDIA container runtime for GPU injection
 #      nodeSelector:
 #        kubernetes.io/hostname: gpu-node-01
-
+      securityContext:
+        runAsUser: 1883
+        runAsGroup: 1883
+        fsGroup: 1883
+              
       containers:
         - name: mosquitto
           image: docker.io/eclipse-mosquitto:2.0.20

@@ -122,7 +122,7 @@ openssl x509 -req \
 
 # Option B — Existing Domain Certificate (Recommended)
 
-The instructor-recommended solution is to reuse the existing wildcard domain certificate already used within the infrastructure.
+A recommended solution is to reuse the existing wildcard domain certificate already used within the infrastructure.
 
 This is the production-grade solution.
 
